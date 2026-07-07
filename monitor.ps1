@@ -6,28 +6,35 @@ param(
 if ($IntervalSeconds -lt 0.5) { $IntervalSeconds = 0.5 }
 
 $script:ConsoleWidth = 80
-$script:ValueCol = 18
-$script:ValueWidth = $script:ConsoleWidth - $script:ValueCol
-$script:LayoutDrawn = $false
-$script:ValueRows = @{}
-$script:FooterRow = 0
+$script:FrameDrawn = $false
+$script:UseAnsi = $false
 $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 $script:GpuName = if ($script:HasNvidiaSmi) { 'Detecting GPU...' } else { 'No NVIDIA GPU detected' }
 
 function Initialize-Console {
     try {
-        if ([Console]::BufferWidth -ne $script:ConsoleWidth) {
+        if (-not ([System.Management.Automation.PSTypeName]'ConsoleMode').Type) {
+            Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class ConsoleMode {
+    [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n);
+    [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint mode);
+    [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint mode);
+}
+"@
+        }
+        $handle = [ConsoleMode]::GetStdHandle(-11)
+        [uint32]$mode = 0
+        [void][ConsoleMode]::GetConsoleMode($handle, [ref]$mode)
+        $script:UseAnsi = [ConsoleMode]::SetConsoleMode($handle, $mode -bor 4)
+
+        if ([Console]::BufferWidth -lt $script:ConsoleWidth) {
             [Console]::BufferWidth = $script:ConsoleWidth
         }
         if ([Console]::WindowWidth -lt $script:ConsoleWidth) {
             [Console]::WindowWidth = $script:ConsoleWidth
-        }
-        if ([Console]::BufferHeight -lt 30) {
-            [Console]::BufferHeight = 30
-        }
-        if ([Console]::WindowHeight -lt 26) {
-            [Console]::WindowHeight = 26
         }
     }
     catch { }
@@ -112,83 +119,66 @@ function Get-SamplesByPath {
     $AllSamples | Where-Object { $_.Path -like $PathPattern }
 }
 
-function Write-LabelRow {
-    param([string]$Key, [string]$Label, [int]$LineNum)
-    $script:ValueRows[$Key] = $LineNum
-    Write-Host ($Label + (' ' * $script:ValueWidth))
-}
-
-function Initialize-Display {
-    $script:ValueRows = @{}
-    $line = 0
-
-    Clear-Host
-    Write-Host ('=' * $script:ConsoleWidth); $line++
-    Write-Host '            LLM HARDWARE MONITOR (VRAM + SYSTEM FEED)'; $line++
-    Write-Host $script:GpuName.PadRight($script:ConsoleWidth); $line++
-    Write-Host ('=' * $script:ConsoleWidth); $line++
-    if ($script:CounterWarning) {
-        Write-Host $script:CounterWarning.PadRight($script:ConsoleWidth); $line++
-    }
-
-    Write-LabelRow 'Cpu' 'CPU Usage:        ' $line; $line++
-    Write-LabelRow 'Ram' 'System RAM:       ' $line; $line++
-    Write-Host ('-' * $script:ConsoleWidth); $line++
-    Write-LabelRow 'Gpu' 'GPU Compute:      ' $line; $line++
-    Write-LabelRow 'GpuTemp' 'GPU Temp:         ' $line; $line++
-    Write-LabelRow 'GpuPower' 'GPU Power:        ' $line; $line++
-    Write-Host ('-' * $script:ConsoleWidth); $line++
-    Write-LabelRow 'VramUsed' 'VRAM Used:        ' $line; $line++
-    Write-LabelRow 'VramFree' 'VRAM Free:        ' $line; $line++
-    Write-LabelRow 'VramTotal' 'VRAM Total:       ' $line; $line++
-    Write-LabelRow 'VramPct' 'VRAM % Used:      ' $line; $line++
-    Write-LabelRow 'VramMemUtil' 'VRAM Mem Util:    ' $line; $line++
-    Write-LabelRow 'SharedVram' 'Shared GPU RAM:   ' $line; $line++
-    Write-LabelRow 'RamHeadroom' 'RAM for Offload:  ' $line; $line++
-    Write-Host ('-' * $script:ConsoleWidth); $line++
-    Write-LabelRow 'DiskRead' 'Disk Read:        ' $line; $line++
-    Write-LabelRow 'DiskWrite' 'Disk Write:       ' $line; $line++
-    Write-LabelRow 'Network' 'Network:          ' $line; $line++
-    Write-Host ('-' * $script:ConsoleWidth); $line++
-
-    $script:FooterRow = $line
-    Write-Host ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds); $line++
-    Write-Host ''; $line++
-    Write-Host ''; $line++
-
-    $script:LayoutDrawn = $true
-}
-
-function Set-Value {
-    param([string]$Key, [string]$Text)
-    [Console]::SetCursorPosition($script:ValueCol, $script:ValueRows[$Key])
-    [Console]::Write($Text.PadRight($script:ValueWidth))
-}
-
-function Update-Display {
+function Format-Frame {
     param($Metrics)
 
-    if (-not $script:LayoutDrawn) {
-        Initialize-Display
+    $w = $script:ConsoleWidth
+    $lines = @(
+        ('=' * $w)
+        '            LLM HARDWARE MONITOR (VRAM + SYSTEM FEED)'
+        $script:GpuName
+        ('=' * $w)
+    )
+
+    if ($script:CounterWarning) {
+        $lines += $script:CounterWarning
     }
 
-    Set-Value 'Cpu' ('{0,5:N1} %' -f $Metrics.CpuPercent)
-    Set-Value 'Ram' ('{0,5:N1} / {1,5:N1} GB  ({2,5:N1} GB free)' -f $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
-    Set-Value 'Gpu' ('{0,5:N1} %' -f $Metrics.GpuPercent)
-    Set-Value 'GpuTemp' ('{0} C' -f $Metrics.GpuTemp)
-    Set-Value 'GpuPower' $Metrics.GpuPower
-    Set-Value 'VramUsed' ('{0,6:N2} GB' -f $Metrics.VramUsedGB)
-    Set-Value 'VramFree' ('{0,6:N2} GB' -f $Metrics.VramFreeGB)
-    Set-Value 'VramTotal' ('{0,6:N2} GB' -f $Metrics.VramTotalGB)
-    Set-Value 'VramPct' ('{0,5:N1} %' -f $Metrics.VramPctUsed)
-    Set-Value 'VramMemUtil' ('{0,5:N1} %' -f $Metrics.VramMemUtil)
-    Set-Value 'SharedVram' $Metrics.SharedVramLabel
-    Set-Value 'RamHeadroom' $Metrics.RamHeadroomLabel
-    Set-Value 'DiskRead' $Metrics.DiskRead
-    Set-Value 'DiskWrite' $Metrics.DiskWrite
-    Set-Value 'Network' $Metrics.NetThroughput
+    $lines += @(
+        ('CPU Usage:        {0,5:N1} %' -f $Metrics.CpuPercent)
+        ('System RAM:       {0,5:N1} / {1,5:N1} GB  ({2,5:N1} GB free)' -f $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
+        ('-' * $w)
+        ('GPU Compute:      {0,5:N1} %' -f $Metrics.GpuPercent)
+        ('GPU Temp:         {0} C' -f $Metrics.GpuTemp)
+        ('GPU Power:        {0}' -f $Metrics.GpuPower)
+        ('-' * $w)
+        ('VRAM Used:        {0,6:N2} GB' -f $Metrics.VramUsedGB)
+        ('VRAM Free:        {0,6:N2} GB' -f $Metrics.VramFreeGB)
+        ('VRAM Total:       {0,6:N2} GB' -f $Metrics.VramTotalGB)
+        ('VRAM % Used:      {0,5:N1} %' -f $Metrics.VramPctUsed)
+        ('VRAM Mem Util:    {0,5:N1} %' -f $Metrics.VramMemUtil)
+        ('Shared GPU RAM:   {0}' -f $Metrics.SharedVramLabel)
+        ('RAM for Offload:  {0}' -f $Metrics.RamHeadroomLabel)
+        ('-' * $w)
+        ('Disk Read:        {0}' -f $Metrics.DiskRead)
+        ('Disk Write:       {0}' -f $Metrics.DiskWrite)
+        ('Network:          {0}' -f $Metrics.NetThroughput)
+        ('-' * $w)
+        ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds)
+    )
 
-    [Console]::SetCursorPosition(0, $script:FooterRow)
+    return (($lines | ForEach-Object { $_.PadRight($w) }) -join "`r`n")
+}
+
+function Show-Frame {
+    param($Metrics)
+
+    $frame = Format-Frame $Metrics
+
+    if (-not $script:FrameDrawn) {
+        Clear-Host
+        [Console]::Out.Write($frame)
+        $script:FrameDrawn = $true
+    }
+    elseif ($script:UseAnsi) {
+        [Console]::Out.Write("`e[H$frame")
+    }
+    else {
+        Clear-Host
+        [Console]::Out.Write($frame)
+    }
+
+    [Console]::Out.Flush()
 }
 
 # --- Initialization ---
@@ -265,7 +255,7 @@ try {
         $offloadHeadroomGB = [math]::Max(0, [math]::Round($ramFreeGB - 8, 1))
         $ramHeadroomLabel = '{0,5:N1} GB free for CPU layers' -f $offloadHeadroomGB
 
-        Update-Display @{
+        Show-Frame @{
             CpuPercent       = $cpuPercent
             RamUsedGB        = $ramUsedGB
             RamTotalGB       = $staticCache.RamTotalGB
