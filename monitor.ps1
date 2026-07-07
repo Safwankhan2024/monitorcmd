@@ -6,8 +6,6 @@ param(
 if ($IntervalSeconds -lt 0.5) { $IntervalSeconds = 0.5 }
 
 $script:ConsoleWidth = 72
-$script:LayoutDrawn = $false
-$script:ValueLineStart = 0
 $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 
@@ -64,20 +62,6 @@ function Get-RamTotalGB {
     return 0
 }
 
-function Get-SharedVramLimitGB {
-    param([double]$RamTotalGB)
-
-    $sharedLimitCounter = Get-Counter '\GPU Adapter Memory(*)\Shared Limit' -ErrorAction SilentlyContinue
-    if ($sharedLimitCounter) {
-        $sum = Sum-CounterSamples $sharedLimitCounter.CounterSamples
-        if ($sum -gt 0) {
-            return @{ Value = [math]::Round($sum / 1GB, 1); Estimated = $false }
-        }
-    }
-
-    return @{ Value = [math]::Round($RamTotalGB / 2, 1); Estimated = $true }
-}
-
 function Get-CounterSamples {
     param([double]$SampleInterval)
 
@@ -85,7 +69,6 @@ function Get-CounterSamples {
         '\Processor(_Total)\% Processor Time',
         '\GPU Engine(*engtype_3D)\Utilization Percentage',
         '\GPU Adapter Memory(*)\Dedicated Usage',
-        '\GPU Adapter Memory(*)\Shared Usage',
         '\PhysicalDisk(_Total)\Disk Read Bytes/sec',
         '\PhysicalDisk(_Total)\Disk Write Bytes/sec',
         '\Network Interface(*)\Bytes Total/sec'
@@ -107,74 +90,43 @@ function Get-SamplesByPath {
     $AllSamples | Where-Object { $_.Path -like $PathPattern }
 }
 
-function Write-Line {
-    param([string]$Text)
-    Write-Host $Text.PadRight($script:ConsoleWidth)
-}
-
-function Write-StaticLayout {
-    Clear-Host
-    Write-Line ('=' * $script:ConsoleWidth)
-    Write-Line '       LIGHTWEIGHT HARDWARE MONITOR (TASK MANAGER FEED)'
-    Write-Line ('=' * $script:ConsoleWidth)
-    if ($script:CounterWarning) {
-        Write-Line $script:CounterWarning
-    }
-    $script:ValueLineStart = [Console]::CursorTop
-    Write-Line 'CPU Usage:      '
-    Write-Line 'RAM Usage:      '
-    Write-Line ('-' * $script:ConsoleWidth)
-    Write-Line 'GPU Usage:      '
-    Write-Line 'GPU Temp:       '
-    Write-Line 'Dedicated VRAM: '
-    Write-Line 'Shared VRAM:    '
-    Write-Line ('-' * $script:ConsoleWidth)
-    Write-Line 'Disk Read:      '
-    Write-Line 'Disk Write:     '
-    Write-Line 'Network:        '
-    Write-Line ('-' * $script:ConsoleWidth)
-    Write-Line ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds)
-    $script:LayoutDrawn = $true
-}
-
-function Write-ValueAt {
-    param([int]$LineOffset, [string]$Text)
-    [Console]::SetCursorPosition(0, $script:ValueLineStart + $LineOffset)
-    Write-Host $Text.PadRight($script:ConsoleWidth) -NoNewline
-}
-
 function Render-Frame {
     param($Metrics)
 
-    if (-not $script:LayoutDrawn) {
-        Write-StaticLayout
+    Clear-Host
+    Write-Host ('=' * $script:ConsoleWidth)
+    Write-Host '       LIGHTWEIGHT HARDWARE MONITOR (TASK MANAGER FEED)'
+    Write-Host ('=' * $script:ConsoleWidth)
+    if ($script:CounterWarning) {
+        Write-Host $script:CounterWarning
     }
-
-    Write-ValueAt 0 ('CPU Usage:      {0,5:N1} %' -f $Metrics.CpuPercent)
-    Write-ValueAt 1 ('RAM Usage:      {0,5:N1} GB / Total: {1,5:N1} GB ({2,5:N1} GB Free)' -f `
+    Write-Host ('CPU Usage:      {0,5:N1} %' -f $Metrics.CpuPercent)
+    Write-Host ('RAM Usage:      {0,5:N1} GB / Total: {1,5:N1} GB ({2,5:N1} GB Free)' -f `
         $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
-    Write-ValueAt 3 ('GPU Usage:      {0,5:N1} %' -f $Metrics.GpuPercent)
-    Write-ValueAt 4 ('GPU Temp:       {0} C' -f $Metrics.GpuTemp)
-    Write-ValueAt 5 ('Dedicated VRAM: {0,5:N2} GB / Total: {1} GB' -f $Metrics.VramUsedGB, $Metrics.VramTotalLabel)
-    Write-ValueAt 6 ('Shared VRAM:    {0,5:N2} GB / Total: {1} GB' -f $Metrics.SharedUsedGB, $Metrics.SharedTotalLabel)
-    Write-ValueAt 8 ('Disk Read:      {0}' -f $Metrics.DiskRead)
-    Write-ValueAt 9 ('Disk Write:     {0}' -f $Metrics.DiskWrite)
-    Write-ValueAt 10 ('Network:        {0}' -f $Metrics.NetThroughput)
+    Write-Host ('-' * $script:ConsoleWidth)
+    Write-Host ('GPU Usage:      {0,5:N1} %' -f $Metrics.GpuPercent)
+    Write-Host ('GPU Temp:       {0} C' -f $Metrics.GpuTemp)
+    Write-Host ('VRAM Usage:     {0,5:N2} GB / Total: {1} GB' -f $Metrics.VramUsedGB, $Metrics.VramTotalLabel)
+    Write-Host ('-' * $script:ConsoleWidth)
+    Write-Host ('Disk Read:      {0}' -f $Metrics.DiskRead)
+    Write-Host ('Disk Write:     {0}' -f $Metrics.DiskWrite)
+    Write-Host ('Network:        {0}' -f $Metrics.NetThroughput)
+    Write-Host ('-' * $script:ConsoleWidth)
+    Write-Host ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds)
 }
 
 # --- Initialization ---
 $ramTotalGB = Get-RamTotalGB
 $vramInfo = Get-VramTotalGB
-$sharedInfo = Get-SharedVramLimitGB -RamTotalGB $ramTotalGB
 
 $staticCache = @{
     RamTotalGB        = $ramTotalGB
     VramTotalGB       = $vramInfo.Value
     VramApprox        = $vramInfo.Approx
-    SharedTotalGB     = $sharedInfo.Value
-    SharedEstimated   = $sharedInfo.Estimated
     LastStaticRefresh = Get-Date
 }
+
+try { [Console]::CursorVisible = $false } catch { }
 
 # Warm up CPU counter (first sample is discarded by the engine on next read with SampleInterval)
 Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -ErrorAction SilentlyContinue | Out-Null
@@ -185,11 +137,8 @@ try {
         if (((Get-Date) - $staticCache.LastStaticRefresh).TotalSeconds -ge 30) {
             $staticCache.RamTotalGB = Get-RamTotalGB
             $vramInfo = Get-VramTotalGB
-            $sharedInfo = Get-SharedVramLimitGB -RamTotalGB $staticCache.RamTotalGB
             $staticCache.VramTotalGB = $vramInfo.Value
             $staticCache.VramApprox = $vramInfo.Approx
-            $staticCache.SharedTotalGB = $sharedInfo.Value
-            $staticCache.SharedEstimated = $sharedInfo.Estimated
             $staticCache.LastStaticRefresh = Get-Date
         }
 
@@ -205,9 +154,6 @@ try {
 
         $vram = Get-SamplesByPath $allSamples '*\GPU Adapter Memory(*)\Dedicated Usage'
         $vramUsedGB = [math]::Round((Sum-CounterSamples $vram) / 1GB, 2)
-
-        $shared = Get-SamplesByPath $allSamples '*\GPU Adapter Memory(*)\Shared Usage'
-        $sharedUsedGB = [math]::Round((Sum-CounterSamples $shared) / 1GB, 2)
 
         $diskRead = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Read Bytes/sec'
         $diskWrite = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Write Bytes/sec'
@@ -231,31 +177,20 @@ try {
             if ($staticCache.VramApprox) { '{0:N2} (approx)' -f $staticCache.VramTotalGB }
             else { '{0:N2}' -f $staticCache.VramTotalGB }
         }
-        else { 'N/A' }
-
-        $sharedTotalLabel = if ($staticCache.SharedEstimated) {
-            '{0:N1} (est.)' -f $staticCache.SharedTotalGB
-        }
-        else {
-            '{0:N1}' -f $staticCache.SharedTotalGB
-        }
+        else { '0.00' }
 
         Render-Frame @{
-            CpuPercent       = $cpuPercent
-            RamUsedGB        = $ramUsedGB
-            RamTotalGB       = $staticCache.RamTotalGB
-            RamFreeGB        = $ramFreeGB
-            GpuPercent       = $gpuPercent
-            GpuTemp          = $gpuTemp
-            VramUsedGB       = $vramUsedGB
-            VramTotalGB      = $staticCache.VramTotalGB
-            VramTotalLabel   = $vramTotalLabel
-            SharedUsedGB     = $sharedUsedGB
-            SharedTotalGB    = $staticCache.SharedTotalGB
-            SharedTotalLabel = $sharedTotalLabel
-            DiskRead         = Format-Throughput $diskReadRate
-            DiskWrite        = Format-Throughput $diskWriteRate
-            NetThroughput    = Format-Throughput $netRate
+            CpuPercent     = $cpuPercent
+            RamUsedGB      = $ramUsedGB
+            RamTotalGB     = $staticCache.RamTotalGB
+            RamFreeGB      = $ramFreeGB
+            GpuPercent     = $gpuPercent
+            GpuTemp        = $gpuTemp
+            VramUsedGB     = $vramUsedGB
+            VramTotalLabel = $vramTotalLabel
+            DiskRead       = Format-Throughput $diskReadRate
+            DiskWrite      = Format-Throughput $diskWriteRate
+            NetThroughput  = Format-Throughput $netRate
         }
 
         $remainingSleep = $IntervalSeconds - $sampleInterval
@@ -265,7 +200,7 @@ try {
     }
 }
 finally {
-    [Console]::CursorVisible = $true
+    try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
     Write-Host 'Exiting...'
 }
