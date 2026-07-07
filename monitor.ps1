@@ -6,6 +6,11 @@ param(
 if ($IntervalSeconds -lt 0.5) { $IntervalSeconds = 0.5 }
 
 $script:ConsoleWidth = 72
+$script:ValueCol = 16
+$script:ValueWidth = $script:ConsoleWidth - $script:ValueCol
+$script:LayoutDrawn = $false
+$script:ValueRows = @{}
+$script:FooterRow = 0
 $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 
@@ -90,29 +95,63 @@ function Get-SamplesByPath {
     $AllSamples | Where-Object { $_.Path -like $PathPattern }
 }
 
-function Render-Frame {
-    param($Metrics)
+function Write-LabelRow {
+    param([string]$Key, [string]$Label)
+    $script:ValueRows[$Key] = [Console]::CursorTop
+    $blank = ' ' * $script:ValueWidth
+    Write-Host ($Label + $blank)
+}
 
+function Initialize-Display {
     Clear-Host
     Write-Host ('=' * $script:ConsoleWidth)
     Write-Host '       LIGHTWEIGHT HARDWARE MONITOR (TASK MANAGER FEED)'
     Write-Host ('=' * $script:ConsoleWidth)
     if ($script:CounterWarning) {
-        Write-Host $script:CounterWarning
+        Write-Host $script:CounterWarning.PadRight($script:ConsoleWidth)
     }
-    Write-Host ('CPU Usage:      {0,5:N1} %' -f $Metrics.CpuPercent)
-    Write-Host ('RAM Usage:      {0,5:N1} GB / Total: {1,5:N1} GB ({2,5:N1} GB Free)' -f `
-        $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
+
+    Write-LabelRow 'Cpu' 'CPU Usage:      '
+    Write-LabelRow 'Ram' 'RAM Usage:      '
     Write-Host ('-' * $script:ConsoleWidth)
-    Write-Host ('GPU Usage:      {0,5:N1} %' -f $Metrics.GpuPercent)
-    Write-Host ('GPU Temp:       {0} C' -f $Metrics.GpuTemp)
-    Write-Host ('VRAM Usage:     {0,5:N2} GB / Total: {1} GB' -f $Metrics.VramUsedGB, $Metrics.VramTotalLabel)
+    Write-LabelRow 'Gpu' 'GPU Usage:      '
+    Write-LabelRow 'GpuTemp' 'GPU Temp:       '
+    Write-LabelRow 'Vram' 'VRAM Usage:     '
     Write-Host ('-' * $script:ConsoleWidth)
-    Write-Host ('Disk Read:      {0}' -f $Metrics.DiskRead)
-    Write-Host ('Disk Write:     {0}' -f $Metrics.DiskWrite)
-    Write-Host ('Network:        {0}' -f $Metrics.NetThroughput)
+    Write-LabelRow 'DiskRead' 'Disk Read:      '
+    Write-LabelRow 'DiskWrite' 'Disk Write:     '
+    Write-LabelRow 'Network' 'Network:        '
     Write-Host ('-' * $script:ConsoleWidth)
+
+    $script:FooterRow = [Console]::CursorTop
     Write-Host ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds)
+    $script:LayoutDrawn = $true
+}
+
+function Set-Value {
+    param([string]$Key, [string]$Text)
+    [Console]::SetCursorPosition($script:ValueCol, $script:ValueRows[$Key])
+    [Console]::Write($Text.PadRight($script:ValueWidth))
+}
+
+function Update-Display {
+    param($Metrics)
+
+    if (-not $script:LayoutDrawn) {
+        Initialize-Display
+    }
+
+    Set-Value 'Cpu' ('{0,5:N1} %' -f $Metrics.CpuPercent)
+    Set-Value 'Ram' ('{0,5:N1} GB / Total: {1,5:N1} GB ({2,5:N1} GB Free)' -f `
+        $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
+    Set-Value 'Gpu' ('{0,5:N1} %' -f $Metrics.GpuPercent)
+    Set-Value 'GpuTemp' ('{0} C' -f $Metrics.GpuTemp)
+    Set-Value 'Vram' ('{0,5:N2} GB / Total: {1} GB' -f $Metrics.VramUsedGB, $Metrics.VramTotalLabel)
+    Set-Value 'DiskRead' $Metrics.DiskRead
+    Set-Value 'DiskWrite' $Metrics.DiskWrite
+    Set-Value 'Network' $Metrics.NetThroughput
+
+    [Console]::SetCursorPosition(0, $script:FooterRow)
 }
 
 # --- Initialization ---
@@ -179,7 +218,7 @@ try {
         }
         else { '0.00' }
 
-        Render-Frame @{
+        Update-Display @{
             CpuPercent     = $cpuPercent
             RamUsedGB      = $ramUsedGB
             RamTotalGB     = $staticCache.RamTotalGB
