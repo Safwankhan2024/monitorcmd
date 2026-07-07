@@ -11,6 +11,7 @@ $script:UseAnsi = $false
 $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 $script:GpuName = if ($script:HasNvidiaSmi) { 'Detecting GPU...' } else { 'No NVIDIA GPU detected' }
+$script:FrameLines = 0
 
 function Initialize-Console {
     try {
@@ -164,19 +165,27 @@ function Show-Frame {
     param($Metrics)
 
     $frame = Format-Frame $Metrics
+    $newLines = ($frame -split "`n").Count
 
-    if (-not $script:FrameDrawn) {
-        Clear-Host
-        [Console]::Out.Write($frame)
-        $script:FrameDrawn = $true
+    [Console]::SetCursorPosition(0, 0)
+    [Console]::Out.Write($frame)
+
+    # Clear leftover lines from a previous longer frame
+    if ($newLines -lt $script:FrameLines) {
+        $windowHeight = [Console]::WindowHeight
+        $clearFrom = $newLines
+        $clearTo = [Math]::Min($script:FrameLines, $windowHeight - 1)
+        for ($i = $clearFrom; $i -le $clearTo; $i++) {
+            [Console]::SetCursorPosition(0, $i)
+            [Console]::Out.Write((' ' * $script:ConsoleWidth))
+        }
     }
-    elseif ($script:UseAnsi) {
-        [Console]::Out.Write("`e[H$frame")
-    }
-    else {
-        Clear-Host
-        [Console]::Out.Write($frame)
-    }
+
+    # Position cursor below the frame
+    $finalRow = [Math]::Min($newLines, [Console]::WindowHeight - 1)
+    [Console]::SetCursorPosition(0, $finalRow)
+    $script:FrameLines = $newLines
+    $script:FrameDrawn = $true
 
     [Console]::Out.Flush()
 }
