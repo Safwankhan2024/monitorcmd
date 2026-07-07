@@ -5,14 +5,33 @@ param(
 
 if ($IntervalSeconds -lt 0.5) { $IntervalSeconds = 0.5 }
 
-$script:ConsoleWidth = 72
-$script:ValueCol = 16
+$script:ConsoleWidth = 80
+$script:ValueCol = 18
 $script:ValueWidth = $script:ConsoleWidth - $script:ValueCol
 $script:LayoutDrawn = $false
 $script:ValueRows = @{}
 $script:FooterRow = 0
 $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
+$script:GpuName = if ($script:HasNvidiaSmi) { 'Detecting GPU...' } else { 'No NVIDIA GPU detected' }
+
+function Initialize-Console {
+    try {
+        if ([Console]::BufferWidth -ne $script:ConsoleWidth) {
+            [Console]::BufferWidth = $script:ConsoleWidth
+        }
+        if ([Console]::WindowWidth -lt $script:ConsoleWidth) {
+            [Console]::WindowWidth = $script:ConsoleWidth
+        }
+        if ([Console]::BufferHeight -lt 30) {
+            [Console]::BufferHeight = 30
+        }
+        if ([Console]::WindowHeight -lt 26) {
+            [Console]::WindowHeight = 26
+        }
+    }
+    catch { }
+}
 
 function Format-Throughput {
     param([double]$BytesPerSec)
@@ -27,36 +46,25 @@ function Sum-CounterSamples {
     ($Samples.CookedValue | Measure-Object -Sum).Sum
 }
 
-function Get-NvidiaSmiValue {
-    param([string]$Query)
+function Get-NvidiaGpuStats {
     if (-not $script:HasNvidiaSmi) { return $null }
-    $raw = & nvidia-smi --query-gpu=$Query --format=csv,noheader,nounits 2>$null
-    if ($raw -match '\d+(\.\d+)?') { return $matches[0] }
-    return $null
-}
 
-function Get-VramTotalGB {
-    $nvMem = Get-NvidiaSmiValue 'memory.total'
-    if ($nvMem) {
-        return @{ Value = [math]::Round([double]$nvMem / 1024, 2); Approx = $false }
+    $raw = & nvidia-smi --query-gpu=name,memory.used,memory.free,memory.total,utilization.gpu,utilization.memory,temperature.gpu,power.draw --format=csv,noheader,nounits 2>$null
+    if (-not $raw) { return $null }
+
+    $parts = ($raw -split ',\s*', 8)
+    if ($parts.Count -lt 8) { return $null }
+
+    return @{
+        Name        = $parts[0].Trim()
+        MemUsedMiB  = [double]$parts[1]
+        MemFreeMiB  = [double]$parts[2]
+        MemTotalMiB = [double]$parts[3]
+        GpuUtil     = [double]$parts[4]
+        MemUtil     = [double]$parts[5]
+        Temp        = [double]$parts[6]
+        PowerW      = [double]$parts[7]
     }
-
-    $limitCounter = Get-Counter '\GPU Adapter Memory(*)\Dedicated Limit' -ErrorAction SilentlyContinue
-    if ($limitCounter) {
-        $sum = Sum-CounterSamples $limitCounter.CounterSamples
-        if ($sum -gt 0) {
-            return @{ Value = [math]::Round($sum / 1GB, 2); Approx = $false }
-        }
-    }
-
-    $gpuHardware = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
-        Where-Object { $_.AdapterRAM -gt 0 } |
-        Select-Object -First 1
-    if ($gpuHardware) {
-        return @{ Value = [math]::Round($gpuHardware.AdapterRAM / 1GB, 2); Approx = $true }
-    }
-
-    return @{ Value = $null; Approx = $false }
 }
 
 function Get-RamTotalGB {
@@ -67,13 +75,22 @@ function Get-RamTotalGB {
     return 0
 }
 
+function Get-SharedVramGB {
+    $usageCounter = Get-Counter '\GPU Adapter Memory(*)\Shared Usage' -ErrorAction SilentlyContinue
+    $limitCounter = Get-Counter '\GPU Adapter Memory(*)\Shared Limit' -ErrorAction SilentlyContinue
+
+    $used = if ($usageCounter) { [math]::Round((Sum-CounterSamples $usageCounter.CounterSamples) / 1GB, 2) } else { 0 }
+    $limit = if ($limitCounter) { [math]::Round((Sum-CounterSamples $limitCounter.CounterSamples) / 1GB, 1) } else { 0 }
+
+    return @{ UsedGB = $used; LimitGB = $limit }
+}
+
 function Get-CounterSamples {
     param([double]$SampleInterval)
 
     $paths = @(
         '\Processor(_Total)\% Processor Time',
         '\GPU Engine(*engtype_3D)\Utilization Percentage',
-        '\GPU Adapter Memory(*)\Dedicated Usage',
         '\PhysicalDisk(_Total)\Disk Read Bytes/sec',
         '\PhysicalDisk(_Total)\Disk Write Bytes/sec',
         '\Network Interface(*)\Bytes Total/sec'
@@ -96,35 +113,49 @@ function Get-SamplesByPath {
 }
 
 function Write-LabelRow {
-    param([string]$Key, [string]$Label)
-    $script:ValueRows[$Key] = [Console]::CursorTop
-    $blank = ' ' * $script:ValueWidth
-    Write-Host ($Label + $blank)
+    param([string]$Key, [string]$Label, [int]$LineNum)
+    $script:ValueRows[$Key] = $LineNum
+    Write-Host ($Label + (' ' * $script:ValueWidth))
 }
 
 function Initialize-Display {
+    $script:ValueRows = @{}
+    $line = 0
+
     Clear-Host
-    Write-Host ('=' * $script:ConsoleWidth)
-    Write-Host '       LIGHTWEIGHT HARDWARE MONITOR (TASK MANAGER FEED)'
-    Write-Host ('=' * $script:ConsoleWidth)
+    Write-Host ('=' * $script:ConsoleWidth); $line++
+    Write-Host '            LLM HARDWARE MONITOR (VRAM + SYSTEM FEED)'; $line++
+    Write-Host $script:GpuName.PadRight($script:ConsoleWidth); $line++
+    Write-Host ('=' * $script:ConsoleWidth); $line++
     if ($script:CounterWarning) {
-        Write-Host $script:CounterWarning.PadRight($script:ConsoleWidth)
+        Write-Host $script:CounterWarning.PadRight($script:ConsoleWidth); $line++
     }
 
-    Write-LabelRow 'Cpu' 'CPU Usage:      '
-    Write-LabelRow 'Ram' 'RAM Usage:      '
-    Write-Host ('-' * $script:ConsoleWidth)
-    Write-LabelRow 'Gpu' 'GPU Usage:      '
-    Write-LabelRow 'GpuTemp' 'GPU Temp:       '
-    Write-LabelRow 'Vram' 'VRAM Usage:     '
-    Write-Host ('-' * $script:ConsoleWidth)
-    Write-LabelRow 'DiskRead' 'Disk Read:      '
-    Write-LabelRow 'DiskWrite' 'Disk Write:     '
-    Write-LabelRow 'Network' 'Network:        '
-    Write-Host ('-' * $script:ConsoleWidth)
+    Write-LabelRow 'Cpu' 'CPU Usage:        ' $line; $line++
+    Write-LabelRow 'Ram' 'System RAM:       ' $line; $line++
+    Write-Host ('-' * $script:ConsoleWidth); $line++
+    Write-LabelRow 'Gpu' 'GPU Compute:      ' $line; $line++
+    Write-LabelRow 'GpuTemp' 'GPU Temp:         ' $line; $line++
+    Write-LabelRow 'GpuPower' 'GPU Power:        ' $line; $line++
+    Write-Host ('-' * $script:ConsoleWidth); $line++
+    Write-LabelRow 'VramUsed' 'VRAM Used:        ' $line; $line++
+    Write-LabelRow 'VramFree' 'VRAM Free:        ' $line; $line++
+    Write-LabelRow 'VramTotal' 'VRAM Total:       ' $line; $line++
+    Write-LabelRow 'VramPct' 'VRAM % Used:      ' $line; $line++
+    Write-LabelRow 'VramMemUtil' 'VRAM Mem Util:    ' $line; $line++
+    Write-LabelRow 'SharedVram' 'Shared GPU RAM:   ' $line; $line++
+    Write-LabelRow 'RamHeadroom' 'RAM for Offload:  ' $line; $line++
+    Write-Host ('-' * $script:ConsoleWidth); $line++
+    Write-LabelRow 'DiskRead' 'Disk Read:        ' $line; $line++
+    Write-LabelRow 'DiskWrite' 'Disk Write:       ' $line; $line++
+    Write-LabelRow 'Network' 'Network:          ' $line; $line++
+    Write-Host ('-' * $script:ConsoleWidth); $line++
 
-    $script:FooterRow = [Console]::CursorTop
-    Write-Host ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds)
+    $script:FooterRow = $line
+    Write-Host ('Updating every {0:N1}s. Press Ctrl+C to exit.' -f $IntervalSeconds); $line++
+    Write-Host ''; $line++
+    Write-Host ''; $line++
+
     $script:LayoutDrawn = $true
 }
 
@@ -142,11 +173,17 @@ function Update-Display {
     }
 
     Set-Value 'Cpu' ('{0,5:N1} %' -f $Metrics.CpuPercent)
-    Set-Value 'Ram' ('{0,5:N1} GB / Total: {1,5:N1} GB ({2,5:N1} GB Free)' -f `
-        $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
+    Set-Value 'Ram' ('{0,5:N1} / {1,5:N1} GB  ({2,5:N1} GB free)' -f $Metrics.RamUsedGB, $Metrics.RamTotalGB, $Metrics.RamFreeGB)
     Set-Value 'Gpu' ('{0,5:N1} %' -f $Metrics.GpuPercent)
     Set-Value 'GpuTemp' ('{0} C' -f $Metrics.GpuTemp)
-    Set-Value 'Vram' ('{0,5:N2} GB / Total: {1} GB' -f $Metrics.VramUsedGB, $Metrics.VramTotalLabel)
+    Set-Value 'GpuPower' $Metrics.GpuPower
+    Set-Value 'VramUsed' ('{0,6:N2} GB' -f $Metrics.VramUsedGB)
+    Set-Value 'VramFree' ('{0,6:N2} GB' -f $Metrics.VramFreeGB)
+    Set-Value 'VramTotal' ('{0,6:N2} GB' -f $Metrics.VramTotalGB)
+    Set-Value 'VramPct' ('{0,5:N1} %' -f $Metrics.VramPctUsed)
+    Set-Value 'VramMemUtil' ('{0,5:N1} %' -f $Metrics.VramMemUtil)
+    Set-Value 'SharedVram' $Metrics.SharedVramLabel
+    Set-Value 'RamHeadroom' $Metrics.RamHeadroomLabel
     Set-Value 'DiskRead' $Metrics.DiskRead
     Set-Value 'DiskWrite' $Metrics.DiskWrite
     Set-Value 'Network' $Metrics.NetThroughput
@@ -155,29 +192,24 @@ function Update-Display {
 }
 
 # --- Initialization ---
+Initialize-Console
 $ramTotalGB = Get-RamTotalGB
-$vramInfo = Get-VramTotalGB
+$nvidiaBoot = Get-NvidiaGpuStats
+if ($nvidiaBoot) { $script:GpuName = $nvidiaBoot.Name }
 
 $staticCache = @{
     RamTotalGB        = $ramTotalGB
-    VramTotalGB       = $vramInfo.Value
-    VramApprox        = $vramInfo.Approx
     LastStaticRefresh = Get-Date
 }
 
 try { [Console]::CursorVisible = $false } catch { }
 
-# Warm up CPU counter (first sample is discarded by the engine on next read with SampleInterval)
 Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -ErrorAction SilentlyContinue | Out-Null
 
 try {
     while ($true) {
-        # Refresh static totals every 30 seconds
         if (((Get-Date) - $staticCache.LastStaticRefresh).TotalSeconds -ge 30) {
             $staticCache.RamTotalGB = Get-RamTotalGB
-            $vramInfo = Get-VramTotalGB
-            $staticCache.VramTotalGB = $vramInfo.Value
-            $staticCache.VramApprox = $vramInfo.Approx
             $staticCache.LastStaticRefresh = Get-Date
         }
 
@@ -188,11 +220,8 @@ try {
         $cpuPercent = if ($cpu) { [math]::Round(($cpu | Select-Object -First 1).CookedValue, 1) } else { 0 }
 
         $gpu = Get-SamplesByPath $allSamples '*\GPU Engine(*engtype_3D)\Utilization Percentage'
-        $gpuPercent = [math]::Round((Sum-CounterSamples $gpu), 1)
-        if ($gpuPercent -gt 100) { $gpuPercent = 100 }
-
-        $vram = Get-SamplesByPath $allSamples '*\GPU Adapter Memory(*)\Dedicated Usage'
-        $vramUsedGB = [math]::Round((Sum-CounterSamples $vram) / 1GB, 2)
+        $gpuPercentCounter = [math]::Round((Sum-CounterSamples $gpu), 1)
+        if ($gpuPercentCounter -gt 100) { $gpuPercentCounter = 100 }
 
         $diskRead = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Read Bytes/sec'
         $diskWrite = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Write Bytes/sec'
@@ -209,27 +238,51 @@ try {
         $ramFreeGB = if ($os) { [math]::Round($os.FreePhysicalMemory / 1MB, 1) } else { 0 }
         $ramUsedGB = [math]::Round($staticCache.RamTotalGB - $ramFreeGB, 1)
 
-        $gpuTemp = Get-NvidiaSmiValue 'temperature.gpu'
-        if (-not $gpuTemp) { $gpuTemp = 'N/A' }
+        $nvidia = Get-NvidiaGpuStats
+        if ($nvidia) { $script:GpuName = $nvidia.Name }
 
-        $vramTotalLabel = if ($staticCache.VramTotalGB) {
-            if ($staticCache.VramApprox) { '{0:N2} (approx)' -f $staticCache.VramTotalGB }
-            else { '{0:N2}' -f $staticCache.VramTotalGB }
+        $vramUsedGB = if ($nvidia) { [math]::Round($nvidia.MemUsedMiB / 1024, 2) } else { 0 }
+        $vramFreeGB = if ($nvidia) { [math]::Round($nvidia.MemFreeMiB / 1024, 2) } else { 0 }
+        $vramTotalGB = if ($nvidia) { [math]::Round($nvidia.MemTotalMiB / 1024, 2) } else { 0 }
+        $vramPctUsed = if ($nvidia -and $nvidia.MemTotalMiB -gt 0) {
+            [math]::Round(($nvidia.MemUsedMiB / $nvidia.MemTotalMiB) * 100, 1)
         }
-        else { '0.00' }
+        else { 0 }
+        $vramMemUtil = if ($nvidia) { [math]::Round($nvidia.MemUtil, 1) } else { 0 }
+        $gpuPercent = if ($nvidia) { [math]::Round($nvidia.GpuUtil, 1) } else { $gpuPercentCounter }
+        $gpuTemp = if ($nvidia) { [math]::Round($nvidia.Temp, 0) } else { 'N/A' }
+        $gpuPower = if ($nvidia) { ('{0:N0} W' -f $nvidia.PowerW) } else { 'N/A' }
+
+        $sharedVram = Get-SharedVramGB
+        $sharedVramLabel = if ($sharedVram.LimitGB -gt 0) {
+            '{0,5:N2} / {1,5:N1} GB used' -f $sharedVram.UsedGB, $sharedVram.LimitGB
+        }
+        else {
+            '{0,5:N2} GB used (no limit counter)' -f $sharedVram.UsedGB
+        }
+
+        # Rough guide: keep ~8 GB system RAM free for OS; rest can host offloaded layers
+        $offloadHeadroomGB = [math]::Max(0, [math]::Round($ramFreeGB - 8, 1))
+        $ramHeadroomLabel = '{0,5:N1} GB free for CPU layers' -f $offloadHeadroomGB
 
         Update-Display @{
-            CpuPercent     = $cpuPercent
-            RamUsedGB      = $ramUsedGB
-            RamTotalGB     = $staticCache.RamTotalGB
-            RamFreeGB      = $ramFreeGB
-            GpuPercent     = $gpuPercent
-            GpuTemp        = $gpuTemp
-            VramUsedGB     = $vramUsedGB
-            VramTotalLabel = $vramTotalLabel
-            DiskRead       = Format-Throughput $diskReadRate
-            DiskWrite      = Format-Throughput $diskWriteRate
-            NetThroughput  = Format-Throughput $netRate
+            CpuPercent       = $cpuPercent
+            RamUsedGB        = $ramUsedGB
+            RamTotalGB       = $staticCache.RamTotalGB
+            RamFreeGB        = $ramFreeGB
+            GpuPercent       = $gpuPercent
+            GpuTemp          = $gpuTemp
+            GpuPower         = $gpuPower
+            VramUsedGB       = $vramUsedGB
+            VramFreeGB       = $vramFreeGB
+            VramTotalGB      = $vramTotalGB
+            VramPctUsed      = $vramPctUsed
+            VramMemUtil      = $vramMemUtil
+            SharedVramLabel  = $sharedVramLabel
+            RamHeadroomLabel = $ramHeadroomLabel
+            DiskRead         = Format-Throughput $diskReadRate
+            DiskWrite        = Format-Throughput $diskWriteRate
+            NetThroughput    = Format-Throughput $netRate
         }
 
         $remainingSleep = $IntervalSeconds - $sampleInterval
