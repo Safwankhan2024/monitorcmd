@@ -79,6 +79,7 @@ Updating every 1.0s. Press Ctrl+C to exit.
 |------|---------|
 | `monitor.bat` | Launcher — sets console window to 80×26, invokes PowerShell with `-NoProfile -ExecutionPolicy Bypass` |
 | `monitor.ps1` | Full monitoring logic — counter collection, frame formatting, ANSI color support, nvidia-smi integration |
+| `monitor.py` | Python refactor of the same monitor logic for Windows |
 
 ## Architecture
 
