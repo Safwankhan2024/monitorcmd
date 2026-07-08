@@ -12,6 +12,9 @@ $script:CounterWarning = $null
 $script:HasNvidiaSmi = [bool](Get-Command nvidia-smi -ErrorAction SilentlyContinue)
 $script:GpuName = if ($script:HasNvidiaSmi) { 'Detecting GPU...' } else { 'No NVIDIA GPU detected' }
 $script:FrameLines = 0
+$script:CountersHealthy = $true
+$script:CounterRepairAttempted = $false
+$script:LastCounterRecoveryAttempt = [DateTime]::MinValue
 
 function Initialize-Console {
     try {
@@ -106,10 +109,28 @@ function Get-CounterSamples {
 
     try {
         $result = Get-Counter -Counter $paths -SampleInterval $SampleInterval -ErrorAction Stop
+        if (-not $script:CountersHealthy) {
+            $script:CountersHealthy = $true
+            $script:CounterWarning = $null
+        }
         return $result.CounterSamples
     }
     catch {
-        $script:CounterWarning = 'Performance counters unavailable — some metrics may show 0.'
+        if ($script:CountersHealthy) {
+            $script:CountersHealthy = $false
+            Try-RepairCounters
+        }
+        else {
+            # Try recovery every 30 seconds
+            $now = Get-Date
+            if (($now - $script:LastCounterRecoveryAttempt).TotalSeconds -ge 30) {
+                $script:LastCounterRecoveryAttempt = $now
+                if (Test-Counters) {
+                    $script:CountersHealthy = $true
+                    $script:CounterWarning = $null
+                }
+            }
+        }
         return $null
     }
 }
@@ -203,7 +224,8 @@ $staticCache = @{
 
 try { [Console]::CursorVisible = $false } catch { }
 
-Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -ErrorAction SilentlyContinue | Out-Null
+# Pre-test counters at startup; if broken, attempt immediate repair
+if (-not (Test-Counters)) { Try-RepairCounters }
 
 try {
     while ($true) {
@@ -215,23 +237,35 @@ try {
         $sampleInterval = [math]::Min(1, $IntervalSeconds)
         $allSamples = Get-CounterSamples -SampleInterval $sampleInterval
 
-        $cpu = Get-SamplesByPath $allSamples '*\Processor(_Total)\% Processor Time'
-        $cpuPercent = if ($cpu) { [math]::Round(($cpu | Select-Object -First 1).CookedValue, 1) } else { 0 }
+        if ($allSamples) {
+            # Primary: performance counters
+            $cpu = Get-SamplesByPath $allSamples '*\Processor(_Total)\% Processor Time'
+            $cpuPercent = if ($cpu) { [math]::Round(($cpu | Select-Object -First 1).CookedValue, 1) } else { 0 }
 
-        $gpu = Get-SamplesByPath $allSamples '*\GPU Engine(*engtype_3D)\Utilization Percentage'
-        $gpuPercentCounter = [math]::Round((Sum-CounterSamples $gpu), 1)
-        if ($gpuPercentCounter -gt 100) { $gpuPercentCounter = 100 }
+            $gpu = Get-SamplesByPath $allSamples '*\GPU Engine(*engtype_3D)\Utilization Percentage'
+            $gpuPercentCounter = [math]::Round((Sum-CounterSamples $gpu), 1)
+            if ($gpuPercentCounter -gt 100) { $gpuPercentCounter = 100 }
 
-        $diskRead = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Read Bytes/sec'
-        $diskWrite = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Write Bytes/sec'
-        $diskReadRate = Sum-CounterSamples $diskRead
-        $diskWriteRate = Sum-CounterSamples $diskWrite
+            $diskRead = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Read Bytes/sec'
+            $diskWrite = Get-SamplesByPath $allSamples '*\PhysicalDisk(_Total)\Disk Write Bytes/sec'
+            $diskReadRate = Sum-CounterSamples $diskRead
+            $diskWriteRate = Sum-CounterSamples $diskWrite
 
-        $net = Get-SamplesByPath $allSamples '*\Network Interface(*)\Bytes Total/sec'
-        $netSamples = $net | Where-Object {
-            $_.InstanceName -notmatch '(?i)loopback|isatap|teredo|qos|pseudo|kernel|hyper-v|vmware|virtualbox'
+            $net = Get-SamplesByPath $allSamples '*\Network Interface(*)\Bytes Total/sec'
+            $netSamples = $net | Where-Object {
+                $_.InstanceName -notmatch '(?i)loopback|isatap|teredo|qos|pseudo|kernel|hyper-v|vmware|virtualbox'
+            }
+            $netRate = Sum-CounterSamples $netSamples
         }
-        $netRate = Sum-CounterSamples $netSamples
+        else {
+            # Fallback: WMI/CIM metrics (no performance counters needed)
+            $fallback = Get-FallbackMetrics -SampleInterval $sampleInterval
+            $cpuPercent = $fallback.CpuPercent
+            $diskReadRate = $fallback.DiskReadRate
+            $diskWriteRate = $fallback.DiskWriteRate
+            $netRate = $fallback.NetRate
+            $gpuPercentCounter = 0
+        }
 
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
         $ramFreeGB = if ($os) { [math]::Round($os.FreePhysicalMemory / 1MB, 1) } else { 0 }
@@ -294,4 +328,103 @@ finally {
     try { [Console]::CursorVisible = $true } catch { }
     Write-Host ''
     Write-Host 'Exiting...'
+}
+
+function Try-RepairCounters {
+    if ($script:CounterRepairAttempted) { return }
+    $script:CounterRepairAttempted = $true
+
+    try {
+        $script:CounterWarning = 'Repairing performance counters...'
+        Start-Transcript -Path $null -Append 2>$null | Out-Null
+
+        # Try non-elevated first
+        $repairResult = lodctr /r 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $script:CountersHealthy = $true
+            $script:CounterWarning = 'Performance counters repaired.'
+            Start-Sleep -Seconds 1
+            return
+        }
+
+        # Try elevated via Start-Process
+        $elevatedResult = Start-Process -FilePath 'lodctr' -ArgumentList '/r' -Verb RunAs -Wait -PassThru -NoNewWindow 2>$null
+        if ($elevatedResult.ExitCode -eq 0) {
+            $script:CountersHealthy = $true
+            $script:CounterWarning = 'Performance counters repaired (elevated).'
+            Start-Sleep -Seconds 1
+            return
+        }
+
+        # Fallback: try rebuilding from inn file
+        $windir = $env:WINDIR
+        $innPath = Join-Path $windir 'System32\stdcnt.ad'
+        if (Test-Path $innPath) {
+            $rebuildResult = Start-Process -FilePath 'lodctr' -ArgumentList "/r:$innPath" -Verb RunAs -Wait -PassThru -NoNewWindow 2>$null
+            if ($rebuildResult.ExitCode -eq 0) {
+                $script:CountersHealthy = $true
+                $script:CounterWarning = 'Performance counters repaired (from stdcnt.ad).'
+                Start-Sleep -Seconds 1
+                return
+            }
+        }
+
+        $script:CounterWarning = 'Using fallback metrics (counter repair needs admin).'
+    }
+    catch {
+        $script:CounterWarning = 'Using fallback metrics (counter repair needs admin).'
+    }
+}
+
+function Test-Counters {
+    try {
+        Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 0.5 -MaxSamples 1 -ErrorAction Stop | Out-Null
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Get-FallbackMetrics {
+    param([double]$SampleInterval)
+
+    $metrics = @{
+        CpuPercent = 0
+        DiskReadRate = 0
+        DiskWriteRate = 0
+        NetRate = 0
+    }
+
+    # CPU via WMI
+    try {
+        $cpu1 = Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Sum
+        $metrics.CpuPercent = [math]::Round($cpu1.Sum / $cpu1.Count, 1)
+    }
+    catch {}
+
+    # Disk via WMI
+    try {
+        $disks = Get-CimInstance Win32_PerfFormattedData_PerfDisk_LogicalDisk -Filter 'Name="_Total"'
+        if ($disks) {
+            $metrics.DiskReadRate = $disks.DiskReadBytesPerSec
+            $metrics.DiskWriteRate = $disks.DiskWriteBytesPerSec
+        }
+    }
+    catch {}
+
+    # Network via WMI
+    try {
+        $adapters = Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface
+        $totalBytes = 0
+        foreach ($adapter in $adapters) {
+            if ($adapter.Name -notmatch '(?i)loopback|isatap|teredo|qos|pseudo|kernel|hyper-v|vmware|virtualbox') {
+                $totalBytes += $adapter.BytesTotalPerSec
+            }
+        }
+        $metrics.NetRate = $totalBytes
+    }
+    catch {}
+
+    return $metrics
 }
