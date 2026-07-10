@@ -1,6 +1,29 @@
-# Lightweight Hardware Monitor
+# monitorcmd — 0 VRAM System Monitor for LLM Inference
 
-A minimal Windows console monitor designed specifically for **LLM inference monitoring** (VRAM + system feed). It reads the same performance counters as Task Manager and displays them in a compact, real-time frame. Double-click `monitor.bat` or run the PowerShell or Python script directly.
+> **Zero VRAM overhead.** A lightweight Windows console monitor that uses **0 MB of VRAM** to track VRAM, GPU, and system resources in real-time — purpose-built for LLM inference optimization.
+
+Double-click `monitor.bat` and watch your GPU metrics without stealing the very resource you're trying to measure.
+
+## Why 0 VRAM Matters
+
+When running LLM inference, every megabyte of VRAM counts. Most monitoring tools (Task Manager GPU tab, HWInfo, MSI Afterburner OSD, etc.) consume GPU memory just to display metrics — which is exactly what you're trying to optimize.
+
+**monitorcmd uses pure Windows Performance Counters and `nvidia-smi` CLI queries.** No GPU rendering, no overlays, no DirectX hooks. Just a text console reading the same counters the OS already collects. **VRAM impact: 0 MB.**
+
+## What It Monitors
+
+| Category | Metrics |
+|----------|---------|
+| **VRAM** | Used / Free / Total, % Used, Memory Bus Utilization, Shared GPU RAM |
+| **GPU** | Compute utilization, Temperature, Power draw |
+| **System** | CPU usage, RAM (Used/Total/Free), RAM available for CPU offload |
+| **I/O** | Disk read/write throughput, Network throughput |
+
+### LLM-Specific Insights
+
+- **RAM for Offload** — Free system RAM minus an 8 GB OS reserve, giving you a rough guide for how many CPU-offloaded LLM layers you can fit
+- **VRAM % Used** — Instant visibility into how much dedicated VRAM your model is consuming
+- **Shared GPU RAM** — Tracks shared memory usage (useful for models that spill beyond dedicated VRAM)
 
 ## Requirements
 
@@ -166,6 +189,7 @@ If counters fail during operation, the monitor periodically re-tests (every 30 s
 - **No NVIDIA GPU:** The monitor will still show CPU, RAM, disk, and network metrics. GPU fields will show `N/A` or `0`.
 - **Counter corruption:** Common after Windows updates or third-party monitoring tools. The auto-repair usually fixes it. If not, run `lodctr /r` manually as Administrator.
 - **Python without psutil:** The Python version works without `psutil`, but fallback metrics will show zeros. Install with `pip install psutil` for full functionality.
+- **Running alongside LLM inference:** Since monitorcmd uses 0 VRAM, you can run it in a separate console window while your LLM server (Ollama, llama.cpp, vLLM, etc.) is active — it won't impact your available VRAM or inference performance.
 
 ### Execution Flow
 
