@@ -88,7 +88,7 @@ Each line in the output corresponds to a specific value from the code:
 
 | Display Label | Code Variable | Source | What It Means |
 |---|---|---|---|
-| `Shared GPU RAM` | `shared_vram_label` | `typeperf` → `\GPU Adapter Memory(*)\Shared Usage` | System RAM the GPU can borrow when dedicated VRAM is full. Shows used / limit in GB |
+| `Shared GPU RAM` | `shared_vram_label` | `typeperf` → `\GPU Adapter Memory(*)\Shared Usage` | System RAM the GPU can borrow when dedicated VRAM is full. Shows used / limit in GB. **Warning:** If this starts rising during LLM inference, it means your model is spilling beyond dedicated VRAM onto system RAM — inference speed will drop dramatically (often to 1-2 tokens/sec) because system RAM is accessed over PCIe, not the GPU's direct memory bus |
 | `RAM for Offload` | `ram_headroom_label` | Calculated: `ram_free_gb - 8.0` | Free system RAM minus 8 GB OS reserve — rough estimate of how much RAM is available for CPU-offloaded LLM layers |
 
 ### Disk & Network
