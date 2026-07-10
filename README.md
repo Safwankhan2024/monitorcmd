@@ -1,60 +1,26 @@
-# monitorcmd — 0 VRAM System Monitor for LLM Inference
+# monitorcmd
 
-> **Zero VRAM overhead.** A lightweight Windows console monitor that uses **0 MB of VRAM** to track GPU and system resources in real-time — purpose-built for LLM inference optimization.
+A Windows console monitor that uses **0 MB of VRAM** to watch GPU and system resources in real-time. Built for LLM inference — you can run it alongside Ollama, llama.cpp, vLLM, etc. without stealing the VRAM you're trying to measure.
 
-Run `python monitor.py` and watch your GPU metrics without stealing the very resource you're trying to measure.
-
-## Why 0 VRAM Matters
-
-When running LLM inference, every megabyte of VRAM counts. Most monitoring tools (Task Manager GPU tab, HWInfo, MSI Afterburner, etc.) consume GPU memory just to display metrics — which is exactly what you're trying to optimize.
-
-**monitorcmd uses Windows Performance Counters and `nvidia-smi` CLI queries.** No GPU rendering, no overlays, no DirectX hooks. Just a text console reading the same counters the OS already collects. **VRAM impact: 0 MB.**
-
-## What It Monitors
-
-| Category | Metrics |
-|----------|---------|
-| **VRAM** | Used / Free / Total, % Used, Memory Bus Utilization, Shared GPU RAM |
-| **GPU** | Compute utilization, Temperature, Power draw |
-| **System** | CPU usage, RAM (Used/Total/Free), RAM available for CPU offload |
-| **I/O** | Disk read/write throughput, Network throughput |
-
-### LLM-Specific Insights
-
-- **RAM for Offload** — Free system RAM minus an 8 GB OS reserve, so you know how many CPU-offloaded LLM layers you can fit
-- **VRAM % Used** — Instant visibility into how much dedicated VRAM your model is consuming
-- **Shared GPU RAM** — Tracks shared memory usage (useful for models that spill beyond dedicated VRAM)
+It reads Windows Performance Counters (`typeperf`) and `nvidia-smi` CLI output. No GPU rendering, no overlays, no hooks. Just text in a console.
 
 ## Requirements
 
-- **Windows 10 or later**
-- **Python 3.7+**
-- **Optional:** `psutil` (`pip install psutil`) — used as a fallback when Windows performance counters are unavailable
-- **Optional:** NVIDIA driver with `nvidia-smi` — required for GPU temperature, VRAM, and power metrics
-
-## Installation
-
-```bash
-git clone https://github.com/yourusername/monitorcmd.git
-cd monitorcmd
-pip install psutil  # optional, but recommended
-```
+- Windows 10 or later
+- Python 3.7+
+- `psutil` (optional, fallback when performance counters fail): `pip install psutil`
+- NVIDIA driver with `nvidia-smi` (optional, for GPU/VRAM metrics)
 
 ## Usage
 
 ```bash
-# Default — refreshes every second
 python monitor.py
-
-# Faster refresh (half-second updates)
 python monitor.py --interval-seconds 0.5
-
-# Disable colors (for terminals that don't support ANSI)
 python monitor.py --no-color
 ```
 
 | Argument | Default | Description |
-|----------|---------|-------------|
+|---|---|---|
 | `--interval-seconds` | `1.0` | Refresh interval in seconds (minimum `0.5`) |
 | `--no-color` | off | Disable ANSI color codes |
 
@@ -89,29 +55,75 @@ Network:             3.1 MB/s
 Updating every 1.0s. Press Ctrl+C to exit.
 ```
 
+## Metrics Explained
+
+Each line in the output corresponds to a specific value from the code:
+
+### CPU & RAM
+
+| Display Label | Code Variable | Source | What It Means |
+|---|---|---|---|
+| `CPU Usage` | `cpu_percent` | `typeperf` → `\Processor(_Total)\% Processor Time` | Overall CPU utilization across all cores |
+| `System RAM` | `ram_used_gb` / `ram_free_gb` | `GlobalMemoryStatusEx` | Physical RAM: used, total, and free |
+
+### GPU
+
+| Display Label | Code Variable | Source | What It Means |
+|---|---|---|---|
+| `GPU Compute` | `gpu_percent` | `nvidia-smi` → `utilization.gpu` | How busy the GPU's CUDA/graphics cores are (0-100%) |
+| `GPU Temp` | `gpu_temp` | `nvidia-smi` → `temperature.gpu` | GPU core temperature in °C |
+| `GPU Power` | `gpu_power` | `nvidia-smi` → `power.draw` | Current power draw in watts |
+
+### VRAM (Video RAM)
+
+| Display Label | Code Variable | Source | What It Means |
+|---|---|---|---|
+| `VRAM Used` | `vram_used_gb` | `nvidia-smi` → `memory.used` | Dedicated GPU memory currently in use (MiB → GB) |
+| `VRAM Free` | `vram_free_gb` | `nvidia-smi` → `memory.free` | Dedicated GPU memory still available (MiB → GB) |
+| `VRAM Total` | `vram_total_gb` | `nvidia-smi` → `memory.total` | Total dedicated GPU memory on the card (MiB → GB) |
+| `VRAM % Used` | `vram_pct_used` | Calculated: `(MemUsedMiB / MemTotalMiB) * 100` | Percentage of dedicated VRAM consumed |
+| `VRAM Mem Util` | `vram_mem_util` | `nvidia-smi` → `utilization.memory` | **Memory bus activity** — how much the VRAM bandwidth is being used for reads/writes (0-100%). Different from "% Used": you can have 90% VRAM allocated but only 10% memory bus utilization if the model is idle |
+
+### Shared Memory & Offload
+
+| Display Label | Code Variable | Source | What It Means |
+|---|---|---|---|
+| `Shared GPU RAM` | `shared_vram_label` | `typeperf` → `\GPU Adapter Memory(*)\Shared Usage` | System RAM the GPU can borrow when dedicated VRAM is full. Shows used / limit in GB |
+| `RAM for Offload` | `ram_headroom_label` | Calculated: `ram_free_gb - 8.0` | Free system RAM minus 8 GB OS reserve — rough estimate of how much RAM is available for CPU-offloaded LLM layers |
+
+### Disk & Network
+
+| Display Label | Code Variable | Source | What It Means |
+|---|---|---|---|
+| `Disk Read` | `disk_read_rate` | `typeperf` → `\PhysicalDisk(_Total)\Disk Read Bytes/sec` | Total disk read throughput across all disks |
+| `Disk Write` | `disk_write_rate` | `typeperf` → `\PhysicalDisk(_Total)\Disk Write Bytes/sec` | Total disk write throughput across all disks |
+| `Network` | `net_rate` | `typeperf` → `\Network Interface(*)\Bytes Total/sec` | Combined send + receive across all real network adapters (excludes loopback, virtual, and tunnel interfaces) |
+
 ## How It Works
 
-The monitor collects data from three sources:
+```
+main() loop:
+  1. Poll typeperf for CPU, GPU Engine, Disk, Network counters
+  2. Run nvidia-smi for GPU name, VRAM, temperature, power, utilization
+  3. Call GlobalMemoryStatusEx for system RAM
+  4. Query typeperf for shared GPU memory
+  5. Build ASCII frame → print to console
+  6. Sleep until next interval
+```
 
-1. **`typeperf`** — Windows Performance Counters for CPU, disk, network, and GPU compute
-2. **`nvidia-smi`** — NVIDIA CLI for VRAM, temperature, power, and memory utilization
-3. **`psutil`** — Python library as a fallback when performance counters are unavailable
-
-It runs in a simple loop: poll counters → query GPU → format frame → print to console → sleep → repeat.
+If `typeperf` fails (corrupted performance counters), the monitor tries to auto-repair with `lodctr /r`, then falls back to `psutil` for CPU/disk/network.
 
 ## Tips
 
-- **Run alongside your LLM server** — Since monitorcmd uses 0 VRAM, you can run it in a separate console while Ollama, llama.cpp, vLLM, etc. are active without impacting inference
-- **Faster refresh** — Use `--interval-seconds 0.5` for half-second updates
-- **No NVIDIA GPU?** — CPU, RAM, disk, and network metrics still work; GPU fields will show `N/A` or `0`
-- **Counter corruption?** — Common after Windows updates. The monitor will auto-repair, or run `lodctr /r` as Administrator
+- **Run alongside your LLM server** — 0 VRAM overhead means it won't impact inference
+- **Faster refresh** — `--interval-seconds 0.5` for half-second updates
+- **No NVIDIA GPU?** — CPU, RAM, disk, and network still work; GPU fields show `N/A` or `0`
 
 ## Troubleshooting
 
 | Issue | Fix |
-|-------|-----|
-| All metrics show 0 | Try running as Administrator; performance counters may need elevated privileges |
-| "Performance counters unavailable" | Run `lodctr /r` from an elevated command prompt |
-| GPU stats not showing | Make sure NVIDIA driver is installed and `nvidia-smi` works in a terminal |
-| Text appears cut off | Widen your console window to at least 80 characters |
+|---|---|
+| All metrics show 0 | Try running as Administrator |
+| GPU stats not showing | Check that `nvidia-smi` works in a terminal |
+| Text cut off | Widen console to at least 80 columns |
 | Colors not showing | Use `--no-color`, or upgrade to Windows Terminal |
