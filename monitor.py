@@ -115,8 +115,8 @@ def _key_checker_thread():
     while True:
         try:
             if HAS_MSVCRT and msvcrt.kbhit():
-                ch = msvcrt.getch()
-                key = chr(ch) if 32 <= ch < 127 else None
+                ch = msvcrt.getch()          # returns bytes like b'1'
+                key = ch.decode('utf-8')     # decode to str '1'
                 if key and key in KEY_LINKS:
                     link_text = KEY_LINKS[key].strip()
                     if link_text:
