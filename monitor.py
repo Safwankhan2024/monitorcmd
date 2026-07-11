@@ -16,6 +16,15 @@ try:
 except ImportError:
     psutil = None
 
+try:
+    import msvcrt
+    import threading
+    import tkinter as tk
+    from tkinter import ttk
+    HAS_MSVCRT = True
+except ImportError:
+    HAS_MSVCRT = False
+
 INTERVAL_MIN = 0.5
 CONSOLE_WIDTH = 80
 COUNTER_WARNING = None
@@ -36,6 +45,89 @@ SHARED_VRAM_LIMIT_COUNTER = r'\GPU Adapter Memory(*)\Shared Limit'
 EXCLUDED_NET_PATTERNS = [
     r'loopback', r'isatap', r'teredo', r'qos', r'pseudo', r'kernel', r'hyper-v', r'vmware', r'virtualbox'
 ]
+
+# ── Quick-Link Key Bindings ──────────────────────────────────────────────────
+# Assign any text (URLs, commands, notes) to console keys.
+# Press the key in the console → a popup appears with the text ready to copy.
+# Press Esc or click Close to dismiss. Monitoring is unaffected.
+KEY_LINKS = {
+    '1': 'https://platform.openai.com/docs/api-reference',
+    '2': 'https://github.com/ggerganov/llama.cpp',
+    '3': 'nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1',
+    '4': 'ollama run llama3.2',
+    '5': '',  # add your own text here
+    '6': '',
+    '7': '',
+    '8': '',
+    '9': '',
+    '0': '',
+}
+
+_popup_active = False
+_popup_lock = threading.Lock()
+
+
+class QuickLinkPopup:
+    """Small always-on-top window with copyable text."""
+
+    def __init__(self, title, text):
+        self.root = tk.Tk()
+        self.root.title(title)
+        self.root.geometry('580x120')
+        self.root.resizable(False, False)
+        self.root.attributes('-topmost', True)
+        self.root.configure(padx=10, pady=10)
+
+        lbl = ttk.Label(self.root, text='Ready to copy (Ctrl+C / right-click → Copy):')
+        lbl.pack(anchor='nw', pady=(0, 4))
+
+        self.textbox = tk.Text(self.root, wrap='word', height=3, font=('Consolas', 10))
+        self.textbox.insert('1.0', text)
+        self.textbox.configure(state='disabled')
+        self.textbox.pack(fill='x', pady=(0, 8))
+
+        btn = ttk.Button(self.root, text='Close', command=self._close)
+        btn.pack(anchor='e')
+
+        self.root.bind('<Escape>', lambda e: self._close())
+        self.root.protocol('WM_DELETE_WINDOW', self._close)
+
+    def _close(self):
+        self.root.destroy()
+
+    def run(self):
+        self.root.mainloop()
+        self.root.destroy()
+
+
+def _show_popup(text):
+    """Show popup in its own thread so monitoring never blocks."""
+    global _popup_active
+    popup = QuickLinkPopup('Quick Link', text)
+    popup.run()
+    with _popup_lock:
+        _popup_active = False
+
+
+def _key_checker_thread():
+    """Poll for key presses; spawn popup on trigger keys."""
+    global _popup_active
+    while True:
+        try:
+            if HAS_MSVCRT and msvcrt.kbhit():
+                ch = msvcrt.getch()
+                key = chr(ch) if 32 <= ch < 127 else None
+                if key and key in KEY_LINKS:
+                    link_text = KEY_LINKS[key].strip()
+                    if link_text:
+                        with _popup_lock:
+                            if not _popup_active:
+                                _popup_active = True
+                                t = threading.Thread(target=_show_popup, args=(link_text,), daemon=True)
+                                t.start()
+        except Exception:
+            pass
+        time.sleep(0.08)  # light polling
 
 
 def enable_ansi():
@@ -365,6 +457,10 @@ def main():
     set_console_size()
     if not args.no_color:
         globals()['USE_ANSI'] = enable_ansi()
+
+    # Start background key listener (Windows only)
+    if HAS_MSVCRT:
+        threading.Thread(target=_key_checker_thread, daemon=True).start()
 
     ram_total_gb = get_ram_total_gb()
     nvidia_boot = get_nvidia_gpu_stats()
