@@ -30,6 +30,11 @@ try:
 except ImportError:
     json = None
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 INTERVAL_MIN = 0.5
 CONSOLE_WIDTH = 80
 COUNTER_WARNING = None
@@ -52,8 +57,8 @@ EXCLUDED_NET_PATTERNS = [
 ]
 
 # ── Quick-Link Key Bindings ──────────────────────────────────────────────────
-# Loaded from quick_links.json (gitignored) so your personal links stay local.
-# Create quick_links.json in the same directory as monitor.py.
+# Supports YAML (quick_links.yaml) or JSON (quick_links.json), both gitignored.
+# YAML is recommended for long multi-line text (AI prompts, etc.).
 # See README.md for the format.
 
 DEFAULT_KEY_LINKS = {
@@ -71,14 +76,32 @@ DEFAULT_KEY_LINKS = {
 
 
 def load_key_links():
-    """Load quick links from quick_links.json, fall back to defaults."""
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'quick_links.json')
-    if json and os.path.exists(config_path):
+    """Load quick links from config file, fall back to defaults.
+    
+    Priority: quick_links.yaml > quick_links.json > DEFAULT_KEY_LINKS
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Try YAML first (best for multi-line text)
+    yaml_path = os.path.join(base_dir, 'quick_links.yaml')
+    if yaml and os.path.exists(yaml_path):
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+                if isinstance(data, dict):
+                    return {str(k): str(v) for k, v in data.items()}
+        except Exception:
+            pass
+    
+    # Fall back to JSON
+    json_path = os.path.join(base_dir, 'quick_links.json')
+    if json and os.path.exists(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             pass
+    
     return DEFAULT_KEY_LINKS
 
 

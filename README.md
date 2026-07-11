@@ -32,7 +32,31 @@ While the monitor is running, press **1**–**0** on your keyboard to pop up a s
 
 ### Configuring Quick Links
 
-Create a `quick_links.json` file in the same directory as `monitor.py` (it's already `.gitignore`d so your personal links stay local):
+The monitor supports two config formats (YAML is preferred for long text):
+
+#### YAML (Recommended — `quick_links.yaml`)
+
+YAML handles multi-line text naturally with `|` (literal block). No escaping needed:
+
+```yaml
+"1": |
+  You are a Principal Software Architect. I will provide you with
+  the current state of my codebase and a new feature request.
+
+  Your task is to design a highly modular, scalable implementation plan.
+  ...
+"2": |
+  You are a Red Team Staff Engineer. Your sole purpose is to break
+  the architectural blueprint provided above.
+  ...
+"3": "nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1"
+"4": "ollama run llama3.2"
+"5": ""
+```
+
+> **Requires** `pyyaml`: `pip install pyyaml` (optional — without it, falls back to JSON/defaults)
+
+#### JSON (`quick_links.json`)
 
 ```json
 {
@@ -48,6 +72,8 @@ Create a `quick_links.json` file in the same directory as `monitor.py` (it's alr
     "0": ""
 }
 ```
+
+> **Note:** JSON doesn't support raw newlines in strings. Use `\n` for line breaks.
 
 - Assign any URL, command, or note to any key
 - Leave empty (`""`) to disable that key

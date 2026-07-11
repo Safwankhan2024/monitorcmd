@@ -1,0 +1,27 @@
+# Quick Links Configuration (YAML)
+# Copy this file to quick_links.yaml and customize.
+#
+# Use | (literal block) for multi-line text — preserves newlines exactly.
+# Use "..." for single-line values.
+# Leave empty ("") to disable a key.
+
+"1": |
+  You are a Principal Software Architect. I will provide you with
+  the current state of my codebase and a new feature request.
+
+  Your task is to design a highly modular, scalable implementation plan.
+  ...
+
+"2": |
+  You are a Red Team Staff Engineer. Your sole purpose is to break
+  the architectural blueprint provided above.
+  ...
+
+"3": "nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1"
+"4": "ollama run llama3.2"
+"5": ""
+"6": ""
+"7": ""
+"8": ""
+"9": ""
+"0": ""
