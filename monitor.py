@@ -112,12 +112,15 @@ _popup_lock = threading.Lock()
 
 
 class QuickLinkPopup:
-    """Small always-on-top window with copyable text."""
+    """Always-on-top window with copyable text, auto-sized with scrolling."""
+
+    MAX_HEIGHT = 600  # maximum window height in pixels
+    LINE_HEIGHT = 18  # approximate height per line in Consolas 10
+    WIDTH = 700       # fixed window width
 
     def __init__(self, title, text):
         self.root = tk.Tk()
         self.root.title(title)
-        self.root.geometry('580x120')
         self.root.resizable(False, False)
         self.root.attributes('-topmost', True)
         self.root.configure(padx=10, pady=10)
@@ -125,10 +128,23 @@ class QuickLinkPopup:
         lbl = ttk.Label(self.root, text='Ready to copy (Ctrl+C / right-click → Copy):')
         lbl.pack(anchor='nw', pady=(0, 4))
 
-        self.textbox = tk.Text(self.root, wrap='word', height=3, font=('Consolas', 10))
+        # Create scrollable text frame
+        scroll_frame = ttk.Frame(self.root)
+        scroll_frame.pack(fill='both', expand=True, pady=(0, 8))
+
+        self.textbox = tk.Text(scroll_frame, wrap='word', font=('Consolas', 10),
+                               yscrollcommand=lambda *a: vbar.set(*a))
         self.textbox.insert('1.0', text)
         self.textbox.configure(state='disabled')
-        self.textbox.pack(fill='x', pady=(0, 8))
+        self.textbox.pack(side='left', fill='both', expand=True)
+
+        vbar = ttk.Scrollbar(scroll_frame, orient='vertical', command=self.textbox.yview)
+        vbar.pack(side='right', fill='y')
+
+        # Calculate height based on text content, capped at MAX_HEIGHT
+        line_count = text.count('\n') + 1
+        calc_height = min(line_count * self.LINE_HEIGHT + 40, self.MAX_HEIGHT)
+        self.root.geometry(f'{self.WIDTH}x{calc_height}')
 
         btn = ttk.Button(self.root, text='Close', command=self._close)
         btn.pack(anchor='e')
