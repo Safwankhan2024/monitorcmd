@@ -9,6 +9,7 @@
 # QUICK LINKS CONFIG (personal links/commands - keep local)
 # =============================================================================
 quick_links.json
+quick_links.yaml
 
 # =============================================================================
 # ENVIRONMENT VARIABLES & SECRETS (CRITICAL - NEVER COMMIT)
