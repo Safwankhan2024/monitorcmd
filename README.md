@@ -32,26 +32,27 @@ While the monitor is running, press **1**–**0** on your keyboard to pop up a s
 
 ### Configuring Quick Links
 
-Open `monitor.py` and edit the `KEY_LINKS` dictionary:
+Create a `quick_links.json` file in the same directory as `monitor.py` (it's already `.gitignore`d so your personal links stay local):
 
-```python
-KEY_LINKS = {
-    '1': 'https://platform.openai.com/docs/api-reference',
-    '2': 'https://github.com/ggerganov/llama.cpp',
-    '3': 'nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1',
-    '4': 'ollama run llama3.2',
-    '5': '',  # add your own text here
-    '6': '',
-    '7': '',
-    '8': '',
-    '9': '',
-    '0': '',
+```json
+{
+    "1": "https://platform.openai.com/docs/api-reference",
+    "2": "https://github.com/ggerganov/llama.cpp",
+    "3": "nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1",
+    "4": "ollama run llama3.2",
+    "5": "",
+    "6": "",
+    "7": "",
+    "8": "",
+    "9": "",
+    "0": ""
 }
 ```
 
 - Assign any URL, command, or note to any key
-- Leave empty (`''`) to disable that key
-- Add custom keys like `'q': 'your text here'`
+- Leave empty (`""`) to disable that key
+- Add custom keys like `"q": "your text here"`
+- If the file doesn't exist or is invalid, the monitor falls back to built-in defaults
 
 ### How It Works
 

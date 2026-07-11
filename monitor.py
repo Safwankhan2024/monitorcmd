@@ -25,6 +25,11 @@ try:
 except ImportError:
     HAS_MSVCRT = False
 
+try:
+    import json
+except ImportError:
+    json = None
+
 INTERVAL_MIN = 0.5
 CONSOLE_WIDTH = 80
 COUNTER_WARNING = None
@@ -47,21 +52,37 @@ EXCLUDED_NET_PATTERNS = [
 ]
 
 # ── Quick-Link Key Bindings ──────────────────────────────────────────────────
-# Assign any text (URLs, commands, notes) to console keys.
-# Press the key in the console → a popup appears with the text ready to copy.
-# Press Esc or click Close to dismiss. Monitoring is unaffected.
-KEY_LINKS = {
+# Loaded from quick_links.json (gitignored) so your personal links stay local.
+# Create quick_links.json in the same directory as monitor.py.
+# See README.md for the format.
+
+DEFAULT_KEY_LINKS = {
     '1': 'https://platform.openai.com/docs/api-reference',
     '2': 'https://github.com/ggerganov/llama.cpp',
     '3': 'nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1',
     '4': 'ollama run llama3.2',
-    '5': '',  # add your own text here
+    '5': '',
     '6': '',
     '7': '',
     '8': '',
     '9': '',
     '0': '',
 }
+
+
+def load_key_links():
+    """Load quick links from quick_links.json, fall back to defaults."""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'quick_links.json')
+    if json and os.path.exists(config_path):
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return DEFAULT_KEY_LINKS
+
+
+KEY_LINKS = DEFAULT_KEY_LINKS
 
 _popup_active = False
 _popup_lock = threading.Lock()
@@ -444,7 +465,7 @@ def is_excluded_interface(path):
 
 
 def main():
-    global GPU_NAME, COUNTER_WARNING
+    global GPU_NAME, COUNTER_WARNING, KEY_LINKS
 
     parser = argparse.ArgumentParser(description='Lightweight hardware monitor for Windows.')
     parser.add_argument('--interval-seconds', type=float, default=1.0, help='Refresh interval in seconds (minimum 0.5)')
@@ -456,6 +477,9 @@ def main():
     set_console_size()
     if not args.no_color:
         globals()['USE_ANSI'] = enable_ansi()
+
+    # Load quick links from config file (gitignored)
+    KEY_LINKS = load_key_links()
 
     # Start background key listener (Windows only)
     if HAS_MSVCRT:
