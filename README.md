@@ -26,6 +26,37 @@ python monitor.py --no-color
 
 Press **Ctrl+C** to exit.
 
+## Quick Links
+
+While the monitor is running, press **1**–**0** on your keyboard to pop up a small window with pre-assigned text (URLs, commands, notes) ready to copy. Press **Esc** or click **Close** to dismiss. The monitoring loop is completely unaffected.
+
+### Configuring Quick Links
+
+Open `monitor.py` and edit the `KEY_LINKS` dictionary:
+
+```python
+KEY_LINKS = {
+    '1': 'https://platform.openai.com/docs/api-reference',
+    '2': 'https://github.com/ggerganov/llama.cpp',
+    '3': 'nvidia-smi --query-gpu=temperature.gpu,utilization.gpu --format=csv -l 1',
+    '4': 'ollama run llama3.2',
+    '5': '',  # add your own text here
+    '6': '',
+    '7': '',
+    '8': '',
+    '9': '',
+    '0': '',
+}
+```
+
+- Assign any URL, command, or note to any key
+- Leave empty (`''`) to disable that key
+- Add custom keys like `'q': 'your text here'`
+
+### How It Works
+
+A background thread polls `msvcrt.kbhit()` every 80 ms. When it detects a trigger key, it spawns a small **Tkinter** popup (always-on-top) in a separate thread. The main monitoring loop never blocks.
+
 ## Example Output
 
 ```
