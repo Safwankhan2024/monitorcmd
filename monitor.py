@@ -97,7 +97,6 @@ class QuickLinkPopup:
 
     def run(self):
         self.root.mainloop()
-        self.root.destroy()
 
 
 def _show_popup(text):
