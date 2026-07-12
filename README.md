@@ -8,8 +8,34 @@ It reads Windows Performance Counters (`typeperf`) and `nvidia-smi` CLI output. 
 
 - Windows 10 or later
 - Python 3.7+
-- `psutil` (optional, fallback when performance counters fail): `pip install psutil`
-- NVIDIA driver with `nvidia-smi` (optional, for GPU/VRAM metrics)
+- NVIDIA driver with `nvidia-smi` (optional — GPU/VRAM metrics need it; CPU, RAM, disk, and network work without)
+
+## Setup
+
+```bash
+# 1. Clone or download the repo
+cd e:\monitorcmd
+
+# 2. Create a virtual environment
+python -m venv .venv
+
+# 3. Activate it
+#    PowerShell:
+.venv\Scripts\Activate.ps1
+#    CMD:
+.venv\Scripts\activate.bat
+
+# 4. Install dependencies
+pip install -r requirements.txt
+
+# 5. (Optional) Verify everything is in place
+python check_env.py
+
+# 6. Run the monitor
+python monitor.py
+```
+
+> **Why a virtual environment?** It keeps dependencies isolated from your system Python, so you won't have conflicts with other projects. The `.venv` folder is already `.gitignore`d.
 
 ## Usage
 
